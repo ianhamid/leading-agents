@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Tape Reader V3: Finnhub API (works on VPS)"""
+"""Tape Reader V3: Finnhub API (Fixed for crypto and stocks)"""
 
-import os, sys, logging, requests
+import os, sys, logging, requests, time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Dict, List
@@ -92,36 +92,40 @@ class CompleteMarketData:
         return self.current_weekly_volume / self.avg_weekly_volume if self.avg_weekly_volume > 0 else 1.0
 
 class FinnhubFetcher:
-    TICKER_MAP = {
-        'btc': 'BINANCE:BTCUSDT',
-        'bitcoin': 'BINANCE:BTCUSDT',
-        'oil': 'NYMEX:CL1!',
-        'nikkei': 'NIKKEI',
-        'dxy': 'DXY',
-        'vix': 'VIX',
-        'sp500': 'GSPC',
-        'aapl': 'AAPL',
-        'msft': 'MSFT',
-        'nvda': 'NVDA',
-        'tsla': 'TSLA',
-        'gold': 'COMEX:GC1!',
-        'spot_gold': 'COMEX:GC1!',
-        'silver': 'COMEX:SI1!',
-        'spot_silver': 'COMEX:SI1!',
+    STOCKS = {
+        'aapl': 'AAPL', 'msft': 'MSFT', 'nvda': 'NVDA', 'tsla': 'TSLA',
+        'nikkei': '^N225', 'dxy': 'DXY', 'vix': '^VIX', 'sp500': '^GSPC',
+    }
+    CRYPTO = {
+        'btc': 'BTCUSD', 'bitcoin': 'BTCUSD',
     }
     
     @staticmethod
     def fetch_complete_data(ticker: str) -> Optional[CompleteMarketData]:
         try:
-            symbol = FinnhubFetcher.TICKER_MAP.get(ticker.lower())
-            if not symbol:
+            ticker_lower = ticker.lower()
+            
+            # Determine if crypto or stock
+            if ticker_lower in FinnhubFetcher.CRYPTO:
+                symbol = FinnhubFetcher.CRYPTO[ticker_lower]
+                is_crypto = True
+            elif ticker_lower in FinnhubFetcher.STOCKS:
+                symbol = FinnhubFetcher.STOCKS[ticker_lower]
+                is_crypto = False
+            else:
+                logger.error(f"Ticker '{ticker}' not found")
                 return None
             
-            logger.info(f"Fetching {symbol} from Finnhub...")
+            logger.info(f"Fetching {symbol} ({'crypto' if is_crypto else 'stock'})...")
             
-            # Get current quote
-            quote_url = f"{BASE_URL}/quote"
-            quote_resp = requests.get(quote_url, params={'symbol': symbol, 'token': API_KEY}, timeout=10)
+            # Get current price
+            if is_crypto:
+                quote_url = f"{BASE_URL}/crypto/quote"
+                quote_resp = requests.get(quote_url, params={'symbol': symbol, 'token': API_KEY}, timeout=10)
+            else:
+                quote_url = f"{BASE_URL}/quote"
+                quote_resp = requests.get(quote_url, params={'symbol': symbol, 'token': API_KEY}, timeout=10)
+            
             if quote_resp.status_code != 200:
                 logger.error(f"Quote error: {quote_resp.status_code}")
                 return None
@@ -134,12 +138,17 @@ class FinnhubFetcher:
                 logger.error(f"No price for {symbol}")
                 return None
             
-            # Get candles (1 year back)
+            # Get historical candles
             now = int(datetime.now().timestamp())
             one_year_ago = int((datetime.now() - timedelta(days=365)).timestamp())
             
-            # Daily candles
-            candle_url = f"{BASE_URL}/stock/candle"
+            if is_crypto:
+                candle_url = f"{BASE_URL}/crypto/candle"
+            else:
+                candle_url = f"{BASE_URL}/stock/candle"
+            
+            # Daily
+            time.sleep(0.2)  # Rate limit
             daily_resp = requests.get(candle_url, params={
                 'symbol': symbol, 'resolution': 'D', 'from': one_year_ago, 'to': now, 'token': API_KEY
             }, timeout=10)
@@ -150,38 +159,27 @@ class FinnhubFetcher:
             daily_lows = daily_data.get('l', [])[-5:] if daily_data.get('l') else [current]*5
             daily_volumes = daily_data.get('v', [])[-5:] if daily_data.get('v') else [1000000]*5
             
-            # Weekly candles
+            # Weekly
+            time.sleep(0.2)  # Rate limit
             weekly_resp = requests.get(candle_url, params={
                 'symbol': symbol, 'resolution': 'W', 'from': one_year_ago, 'to': now, 'token': API_KEY
             }, timeout=10)
             
             weekly_data = weekly_resp.json() if weekly_resp.status_code == 200 else {}
+            weekly_closes = weekly_data.get('c', [])[-8:] if weekly_data.get('c') else [current]*8
+            weekly_highs = weekly_data.get('h', [])[-8:] if weekly_data.get('h') else [current]*8
+            weekly_lows = weekly_data.get('l', [])[-8:] if weekly_data.get('l') else [current]*8
+            weekly_volumes = weekly_data.get('v', [])[-8:] if weekly_data.get('v') else [1000000]*8
+            weekly_times = weekly_data.get('t', [])[-8:] if weekly_data.get('t') else []
             
-            # Extract with safety checks
-            weekly_closes_all = weekly_data.get('c', []) if weekly_data else []
-            weekly_highs_all = weekly_data.get('h', []) if weekly_data else []
-            weekly_lows_all = weekly_data.get('l', []) if weekly_data else []
-            weekly_volumes_all = weekly_data.get('v', []) if weekly_data else []
-            weekly_times_all = weekly_data.get('t', []) if weekly_data else []
-            
-            # Take last 8
-            weekly_closes = weekly_closes_all[-8:] if len(weekly_closes_all) >= 8 else weekly_closes_all + [current]*(8-len(weekly_closes_all))
-            weekly_highs = weekly_highs_all[-8:] if len(weekly_highs_all) >= 8 else weekly_highs_all + [current]*(8-len(weekly_highs_all))
-            weekly_lows = weekly_lows_all[-8:] if len(weekly_lows_all) >= 8 else weekly_lows_all + [current]*(8-len(weekly_lows_all))
-            weekly_volumes = weekly_volumes_all[-8:] if len(weekly_volumes_all) >= 8 else weekly_volumes_all + [1000000]*(8-len(weekly_volumes_all))
-            
-            # Format dates from timestamps
+            # Format dates
             weekly_dates = []
-            if weekly_times_all:
-                weekly_times = weekly_times_all[-8:]
-                for t in weekly_times:
-                    try:
-                        date_str = datetime.fromtimestamp(int(t)).strftime('%d %b %Y')
-                        weekly_dates.append(date_str)
-                    except:
-                        weekly_dates.append('N/A')
-            else:
-                weekly_dates = ['N/A'] * 8
+            for t in weekly_times:
+                try:
+                    weekly_dates.append(datetime.fromtimestamp(int(t)).strftime('%d %b %Y'))
+                except:
+                    weekly_dates.append('N/A')
+            weekly_dates = weekly_dates if weekly_dates else ['N/A']*8
             
             week_52_high = max(weekly_highs) if weekly_highs else current
             week_52_low = min(weekly_lows) if weekly_lows else current
@@ -522,7 +520,7 @@ def main():
         sys.exit(1)
     
     print("\n" + "="*70)
-    print("TAPE READER V3: Finnhub API (Works on VPS)")
+    print("TAPE READER V3: Finnhub (Crypto + Stocks)")
     print("="*70 + "\n")
     
     application = Application.builder().token(token).build()
