@@ -113,7 +113,8 @@ class AlphaVantageFetcher:
             data = resp.json()
             
             if 'Time Series (Daily)' not in data:
-                logger.error(f"No data for {ticker}")
+                logger.error(f"No data for {ticker}. Response keys: {list(data.keys())}")
+                logger.error(f"Full response: {str(data)[:500]}")
                 return None
             
             ts = data['Time Series (Daily)']
