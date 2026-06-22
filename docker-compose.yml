@@ -1,0 +1,32 @@
+version: '3.9'
+
+services:
+  macro-agent:
+    build: .
+    container_name: leading_macro_agent
+    command: python3 macro_agent.py
+    environment:
+      - LEADING_TELEGRAM_TOKEN=${LEADING_TELEGRAM_TOKEN}
+      - LEADING_TELEGRAM_CHAT_ID=${LEADING_TELEGRAM_CHAT_ID}
+      - TZ=Asia/Singapore
+    restart: unless-stopped
+
+  tape-reader-v2:
+    build: .
+    container_name: leading_tape_reader_v2
+    command: python3 tape_reader_agent_v2.py
+    environment:
+      - LEADING_TELEGRAM_TOKEN=${LEADING_TELEGRAM_TOKEN}
+      - LEADING_TELEGRAM_CHAT_ID=${LEADING_TELEGRAM_CHAT_ID}
+      - TZ=Asia/Singapore
+    restart: unless-stopped
+
+  tape-reader-v3:
+    build: .
+    container_name: leading_tape_reader_v3
+    command: python3 tape_reader_agent_v3.py
+    environment:
+      - LEADING_TELEGRAM_TOKEN=${LEADING_TELEGRAM_TOKEN}
+      - LEADING_TELEGRAM_CHAT_ID=${LEADING_TELEGRAM_CHAT_ID}
+      - TZ=Asia/Singapore
+    restart: unless-stopped
