@@ -156,14 +156,32 @@ class FinnhubFetcher:
             }, timeout=10)
             
             weekly_data = weekly_resp.json() if weekly_resp.status_code == 200 else {}
-            weekly_closes = weekly_data.get('c', [])[-8:] if weekly_data.get('c') else [current]*8
-            weekly_highs = weekly_data.get('h', [])[-8:] if weekly_data.get('h') else [current]*8
-            weekly_lows = weekly_data.get('l', [])[-8:] if weekly_data.get('l') else [current]*8
-            weekly_volumes = weekly_data.get('v', [])[-8:] if weekly_data.get('v') else [1000000]*8
-            weekly_times = weekly_data.get('t', [])[-8:] if weekly_data.get('t') else []
             
-            # Format dates
-            weekly_dates = [datetime.fromtimestamp(int(t)).strftime('%d %b %Y') for t in weekly_times] if weekly_times else ['N/A']*8
+            # Extract with safety checks
+            weekly_closes_all = weekly_data.get('c', []) if weekly_data else []
+            weekly_highs_all = weekly_data.get('h', []) if weekly_data else []
+            weekly_lows_all = weekly_data.get('l', []) if weekly_data else []
+            weekly_volumes_all = weekly_data.get('v', []) if weekly_data else []
+            weekly_times_all = weekly_data.get('t', []) if weekly_data else []
+            
+            # Take last 8
+            weekly_closes = weekly_closes_all[-8:] if len(weekly_closes_all) >= 8 else weekly_closes_all + [current]*(8-len(weekly_closes_all))
+            weekly_highs = weekly_highs_all[-8:] if len(weekly_highs_all) >= 8 else weekly_highs_all + [current]*(8-len(weekly_highs_all))
+            weekly_lows = weekly_lows_all[-8:] if len(weekly_lows_all) >= 8 else weekly_lows_all + [current]*(8-len(weekly_lows_all))
+            weekly_volumes = weekly_volumes_all[-8:] if len(weekly_volumes_all) >= 8 else weekly_volumes_all + [1000000]*(8-len(weekly_volumes_all))
+            
+            # Format dates from timestamps
+            weekly_dates = []
+            if weekly_times_all:
+                weekly_times = weekly_times_all[-8:]
+                for t in weekly_times:
+                    try:
+                        date_str = datetime.fromtimestamp(int(t)).strftime('%d %b %Y')
+                        weekly_dates.append(date_str)
+                    except:
+                        weekly_dates.append('N/A')
+            else:
+                weekly_dates = ['N/A'] * 8
             
             week_52_high = max(weekly_highs) if weekly_highs else current
             week_52_low = min(weekly_lows) if weekly_lows else current
