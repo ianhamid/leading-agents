@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tape Reader V3: Finnhub API (Fixed for crypto and stocks)"""
+"""Tape Reader V3: Alpha Vantage API (Free, works on VPS)"""
 
 import os, sys, logging, requests, time
 from datetime import datetime, timedelta
@@ -21,8 +21,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
     handlers=[logging.FileHandler(STATE_DIR / 'tape_reader_v3.log'), logging.StreamHandler()])
 logger = logging.getLogger(__name__)
 
-API_KEY = 'd8sknp9r01qh5rermibgd8sknp9r01qh5rermic0'
-BASE_URL = 'https://finnhub.io/api/v1'
+API_KEY = '3EFXDLDSU56WU2QT'
+BASE_URL = 'https://www.alphavantage.co/query'
 
 @dataclass
 class CompleteMarketData:
@@ -91,101 +91,88 @@ class CompleteMarketData:
     def weekly_volume_ratio(self) -> float:
         return self.current_weekly_volume / self.avg_weekly_volume if self.avg_weekly_volume > 0 else 1.0
 
-class FinnhubFetcher:
-    STOCKS = {
-        'aapl': 'AAPL', 'msft': 'MSFT', 'nvda': 'NVDA', 'tsla': 'TSLA',
-        'nikkei': '^N225', 'dxy': 'DXY', 'vix': '^VIX', 'sp500': '^GSPC',
-    }
-    CRYPTO = {
-        'btc': 'BTCUSD', 'bitcoin': 'BTCUSD',
-    }
-    
+class AlphaVantageFetcher:
     @staticmethod
     def fetch_complete_data(ticker: str) -> Optional[CompleteMarketData]:
         try:
-            ticker_lower = ticker.lower()
+            logger.info(f"Fetching {ticker} from Alpha Vantage...")
             
-            # Determine if crypto or stock
-            if ticker_lower in FinnhubFetcher.CRYPTO:
-                symbol = FinnhubFetcher.CRYPTO[ticker_lower]
-                is_crypto = True
-            elif ticker_lower in FinnhubFetcher.STOCKS:
-                symbol = FinnhubFetcher.STOCKS[ticker_lower]
-                is_crypto = False
-            else:
-                logger.error(f"Ticker '{ticker}' not found")
+            # Get daily data
+            time.sleep(0.5)  # Rate limit
+            resp = requests.get(BASE_URL, params={
+                'function': 'TIME_SERIES_DAILY',
+                'symbol': ticker,
+                'apikey': API_KEY,
+                'outputsize': 'full'
+            }, timeout=15)
+            
+            if resp.status_code != 200:
+                logger.error(f"Status {resp.status_code}")
                 return None
             
-            logger.info(f"Fetching {symbol} ({'crypto' if is_crypto else 'stock'})...")
+            data = resp.json()
             
-            # Get current price
-            if is_crypto:
-                quote_url = f"{BASE_URL}/crypto/quote"
-                quote_resp = requests.get(quote_url, params={'symbol': symbol, 'token': API_KEY}, timeout=10)
-            else:
-                quote_url = f"{BASE_URL}/quote"
-                quote_resp = requests.get(quote_url, params={'symbol': symbol, 'token': API_KEY}, timeout=10)
-            
-            if quote_resp.status_code != 200:
-                logger.error(f"Quote error: {quote_resp.status_code}")
+            if 'Time Series (Daily)' not in data:
+                logger.error(f"No data for {ticker}")
                 return None
             
-            quote = quote_resp.json()
-            current = quote.get('c')
-            prev_close = quote.get('pc')
+            ts = data['Time Series (Daily)']
+            dates = sorted(ts.keys())
             
-            if not current:
-                logger.error(f"No price for {symbol}")
+            if len(dates) < 5:
+                logger.error(f"Not enough data for {ticker}")
                 return None
             
-            # Get historical candles
-            now = int(datetime.now().timestamp())
-            one_year_ago = int((datetime.now() - timedelta(days=365)).timestamp())
+            # Last 5 days
+            daily_closes = []
+            daily_highs = []
+            daily_lows = []
+            daily_volumes = []
             
-            if is_crypto:
-                candle_url = f"{BASE_URL}/crypto/candle"
-            else:
-                candle_url = f"{BASE_URL}/stock/candle"
+            for date in dates[-5:]:
+                candle = ts[date]
+                daily_closes.append(float(candle['4. close']))
+                daily_highs.append(float(candle['2. high']))
+                daily_lows.append(float(candle['3. low']))
+                daily_volumes.append(float(candle['5. volume']))
             
-            # Daily
-            time.sleep(0.2)  # Rate limit
-            daily_resp = requests.get(candle_url, params={
-                'symbol': symbol, 'resolution': 'D', 'from': one_year_ago, 'to': now, 'token': API_KEY
-            }, timeout=10)
+            current = daily_closes[-1]
+            prev_close = daily_closes[-2] if len(daily_closes) > 1 else current
             
-            daily_data = daily_resp.json() if daily_resp.status_code == 200 else {}
-            daily_closes = daily_data.get('c', [])[-5:] if daily_data.get('c') else [current]*5
-            daily_highs = daily_data.get('h', [])[-5:] if daily_data.get('h') else [current]*5
-            daily_lows = daily_data.get('l', [])[-5:] if daily_data.get('l') else [current]*5
-            daily_volumes = daily_data.get('v', [])[-5:] if daily_data.get('v') else [1000000]*5
-            
-            # Weekly
-            time.sleep(0.2)  # Rate limit
-            weekly_resp = requests.get(candle_url, params={
-                'symbol': symbol, 'resolution': 'W', 'from': one_year_ago, 'to': now, 'token': API_KEY
-            }, timeout=10)
-            
-            weekly_data = weekly_resp.json() if weekly_resp.status_code == 200 else {}
-            weekly_closes = weekly_data.get('c', [])[-8:] if weekly_data.get('c') else [current]*8
-            weekly_highs = weekly_data.get('h', [])[-8:] if weekly_data.get('h') else [current]*8
-            weekly_lows = weekly_data.get('l', [])[-8:] if weekly_data.get('l') else [current]*8
-            weekly_volumes = weekly_data.get('v', [])[-8:] if weekly_data.get('v') else [1000000]*8
-            weekly_times = weekly_data.get('t', [])[-8:] if weekly_data.get('t') else []
-            
-            # Format dates
+            # Last 8 weeks (roughly)
+            weekly_closes = []
+            weekly_highs = []
+            weekly_lows = []
+            weekly_volumes = []
             weekly_dates = []
-            for t in weekly_times:
-                try:
-                    weekly_dates.append(datetime.fromtimestamp(int(t)).strftime('%d %b %Y'))
-                except:
-                    weekly_dates.append('N/A')
-            weekly_dates = weekly_dates if weekly_dates else ['N/A']*8
+            
+            week_dates = []
+            for i, date in enumerate(reversed(dates)):
+                if len(week_dates) == 0:
+                    week_dates.append(date)
+                elif (datetime.strptime(dates[-1], '%Y-%m-%d') - datetime.strptime(date, '%Y-%m-%d')).days >= 7 * len(weekly_closes):
+                    week_dates.append(date)
+                    if len(week_dates) > 8:
+                        break
+            
+            if len(week_dates) < 8:
+                week_dates = dates[-56::7] if len(dates) > 56 else dates[::max(1, len(dates)//8)]
+            
+            week_dates = sorted(week_dates)[-8:]
+            
+            for date in week_dates:
+                candle = ts[date]
+                weekly_closes.append(float(candle['4. close']))
+                weekly_highs.append(float(candle['2. high']))
+                weekly_lows.append(float(candle['3. low']))
+                weekly_volumes.append(float(candle['5. volume']))
+                weekly_dates.append(datetime.strptime(date, '%Y-%m-%d').strftime('%d %b %Y'))
             
             week_52_high = max(weekly_highs) if weekly_highs else current
             week_52_low = min(weekly_lows) if weekly_lows else current
             
             return CompleteMarketData(
-                current=current, prev_close=prev_close or current,
+                current=current, prev_close=prev_close,
                 week_52_high=week_52_high, week_52_low=week_52_low,
                 daily_closes=daily_closes, daily_highs=daily_highs,
                 daily_lows=daily_lows, daily_volumes=daily_volumes,
@@ -490,9 +477,9 @@ async def handle_master_prompt_request(update: Update, context: ContextTypes.DEF
     ticker = update.message.text.strip().upper()
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    data = FinnhubFetcher.fetch_complete_data(ticker)
+    data = AlphaVantageFetcher.fetch_complete_data(ticker)
     if data is None:
-        await update.message.reply_text(f"❌ Ticker '{ticker}' not found")
+        await update.message.reply_text(f"❌ Ticker '{ticker}' not found or error fetching data")
         return
     
     p1 = MasterPromptAnalyzer.analyze_part1_weekly(data)
@@ -520,7 +507,7 @@ def main():
         sys.exit(1)
     
     print("\n" + "="*70)
-    print("TAPE READER V3: Finnhub (Crypto + Stocks)")
+    print("TAPE READER V3: Alpha Vantage (FREE - Works on VPS)")
     print("="*70 + "\n")
     
     application = Application.builder().token(token).build()
